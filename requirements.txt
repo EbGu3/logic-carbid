@@ -7,6 +7,6 @@ Flask-SQLAlchemy==3.1.1
 python-dotenv==1.0.1
 bcrypt==4.2.0
 APScheduler==3.10.4
-mysqlclient==2.2.4
+PyMySQL
 Flask-Bcrypt==1.0.1
 Flask-APScheduler==1.13.1

@@ -7,8 +7,8 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
     SQLALCHEMY_DATABASE_URI = (
-        f"mysql://{os.getenv('DB_USER','root')}:{os.getenv('DB_PASSWORD','')}"
-        f"@{os.getenv('DB_HOST','127.0.0.1')}:{os.getenv('DB_PORT','3306')}/{os.getenv('DB_NAME','carbid')}?charset=utf8mb4"
+        f"mysql+pymysql://{os.getenv('DB_USER', 'root')}:{os.getenv('DB_PASSWORD', '')}"
+        f"@{os.getenv('DB_HOST', '127.0.0.1')}:{os.getenv('DB_PORT', '3306')}/{os.getenv('DB_NAME', 'carbid')}?charset=utf8mb4"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
