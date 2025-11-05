@@ -1,0 +1,66 @@
+# --- Python / Flask ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Dependencias compiladas / distribución
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# Pruebas / cobertura
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Tipado / linters / caches
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.pytype/
+.cache/
+
+# Logs
+*.log
+logs/
+
+# Archivos de entorno / secretos (mantén un .env.example en el repo)
+.env
+.env.*
+!.env.example
+
+# Bases de datos / artefactos locales
+*.sqlite
+*.sqlite3
+*.db
+
+# Carpeta instance de Flask (config/archivos locales)
+instance/
+
+# Subidas locales (si usas uploads en dev)
+static/uploads/
+
+# IDE / SO
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Docker / compose overrides locales
+docker-compose.override.yml
+.env.docker
+.env
