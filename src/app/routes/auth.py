@@ -91,59 +91,52 @@ def register():
 @bp.post("/login")
 def login():
     """
-    Probe login con 'returns' tempranos controlados por ?ret=.
-    Valores: enter | raw | parse | demo | before_token
+    Modo diagnóstico + fallback de lectura:
+    - Cuts (?ret=...) para localizar el bloqueo.
+    - Lee JSON si está disponible; si no, acepta credenciales por querystring (?email=...&password=...).
+    - Mantiene el login ultra-rápido DEMO.
     """
-    import json, time
+    from flask import current_app
+    import time, json
+
     t0 = time.perf_counter()
-    ret = (request.args.get("ret") or "").strip().lower()
+    ret = request.args.get("ret")
 
-    def done(tag, data=None, status=200):
-        # Respuesta compacta + headers de diagnóstico
-        resp = api_ok(data if data is not None else {"stage": tag})
-        resp.headers["X-Probe-At"] = tag
-        resp.headers["X-Probe-Duration"] = f"{int((time.perf_counter()-t0)*1000)}ms"
-        return resp, status
-
-    # 0) Justo al entrar
+    # Cut 1: entra al handler
     if ret == "enter":
-        return done("enter")
+        return api_ok({"stage": "enter"})
 
-    # 1) Leer cuerpo crudo (evita bloqueos típicos de get_json)
-    try:
-        raw = request.get_data(cache=False)  # <- importante: no cachear
-    except Exception as e:
-        return api_error("read_raw_failed", 500, detail=str(e))
+    # Cut 2: intenta leer bytes crudos (si aquí se traba, es infraestructura)
     if ret == "raw":
-        return done("raw", {"len": len(raw or b'')})
+        try:
+            raw = request.get_data(cache=False)  # respeta Content-Length
+            return api_ok({"stage": "raw", "len": len(raw or b"")})
+        except Exception as e:
+            return api_ok({"stage": "raw_error", "error": str(e)})
 
-    # 2) Parsear JSON
-    try:
-        data = json.loads(raw.decode("utf-8") if raw else "{}")
-    except Exception as e:
-        # Si querías cortar justo después del parseo, lo dejamos claro
-        if ret in ("parse", "after_parse"):
-            return api_error("parse_error", 400, detail=str(e))
-        # Si no, seguimos con data vacío para no romper más pruebas
-        data = {}
-    if ret in ("parse", "after_parse"):
-        return done("parse", {"ok": True, "has_body": bool(raw)})
+    # Cut 3: intenta parsear JSON en silent
+    if ret == "parse":
+        data = request.get_json(silent=True) or {}
+        return api_ok({"stage": "parse", "keys": list(data.keys())})
 
-    # 3) Validar demo-fastpath (SIN DB / SIN bcrypt)
-    email = (data.get("email") or "").strip()
-    password = data.get("password") or ""
+    # -------- lectura robusta con fallback --------
+    data = request.get_json(silent=True)
+
+    if not data:  # body no vino o falló
+        email = (request.args.get("email") or "").strip()
+        password = request.args.get("password") or ""
+    else:
+        email = (data.get("email") or "").strip()
+        password = data.get("password") or ""
+
+    if not email or not password:
+        return api_error("Faltan credenciales.", 400)
+
+    # --- ULTRA DEMO ---
     demo_pwd = _DEMO.get(email)
-    if ret == "demo":
-        return done("demo", {"has_demo": bool(demo_pwd)})
-
     if not (demo_pwd and _safe_eq(password, demo_pwd)):
         return api_error("Credenciales inválidas (modo ultra).", 401)
 
-    # 4) Antes de crear el JWT
-    if ret == "before_token":
-        return done("before_token")
-
-    # 5) Crear token y responder
     role = _ROLE_BY_EMAIL.get(email, "buyer")
     user = {
         "id": 0,
@@ -151,11 +144,21 @@ def login():
         "name": f"ULTRA-{email.split('@')[0]}",
         "role": role,
     }
+
     token = create_access_token(
         identity="0",
-        additional_claims={"email": user["email"], "name": user["name"], "role": user["role"], "demo": True},
+        additional_claims={
+            "email": user["email"],
+            "name": user["name"],
+            "role": user["role"],
+            "demo": True
+        },
     )
-    return api_ok({"token": token, "user": user})
+
+    resp = api_ok({"token": token, "user": user})
+    # headers de diag
+    resp.headers["X-Probe-LoginMs"] = str(int((time.perf_counter() - t0) * 1000))
+    return resp
 
 
 # --------- FIN LOGIN ULTRA-RÁPIDO ----------
