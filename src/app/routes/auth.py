@@ -30,6 +30,11 @@ _ROLE_BY_EMAIL = {
     "buyer@carbid.test":  "buyer",
 }
 
+@bp.post("/_echo")
+def _echo():
+    data = request.get_json(silent=True) or {}
+    return api_ok({"echo": data, "ts": __import__("time").time()})
+
 # ---------- Endpoints ----------
 @bp.post("/register")
 def register():
