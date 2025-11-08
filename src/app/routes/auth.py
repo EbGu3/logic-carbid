@@ -30,6 +30,24 @@ _ROLE_BY_EMAIL = {
     "buyer@carbid.test":  "buyer",
 }
 
+# app/routes/auth.py  (añade esto junto a tu login actual)
+@bp.post("/signin")
+def signin():  # mismo cuerpo que /login (modo ultra o el “real”)
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    demo_pwd = _DEMO.get(email)
+    if not (demo_pwd and _safe_eq(password, demo_pwd)):
+        return api_error("Credenciales inválidas.", 401)
+
+    role = _ROLE_BY_EMAIL.get(email, "buyer")
+    user = {"id": 0, "email": email, "name": f"ULTRA-{email.split('@')[0]}", "role": role}
+    token = create_access_token(identity="0", additional_claims={
+        "email": user["email"], "name": user["name"], "role": user["role"], "demo": True
+    })
+    return api_ok({"token": token, "user": user})
+
+
 @bp.post("/_login_ping")
 def _login_ping():
     # ¿Llega al handler y devuelve?
