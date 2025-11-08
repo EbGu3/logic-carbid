@@ -150,19 +150,42 @@ def list_bids(vehicle_id):
 @bp.post("/vehicles/<int:vehicle_id>/bids")
 @jwt_required()
 def place_bid(vehicle_id):
-    uid = int(get_jwt_identity())
+    # UID desde JWT
+    uid_raw = get_jwt_identity()
+    try:
+        uid = int(uid_raw)
+    except Exception:
+        return api_error("Token inválido.", 401)
 
-    # Bloqueo de fila del vehículo
-    v = db.session.query(Vehicle).filter_by(id=vehicle_id).with_for_update().first()
+    # --- INPUT: PRIORIDAD QUERY STRING (POST sin body) ---
+    # Ejemplo de llamada: POST /api/vehicles/123/bids?amount=456000
+    amt_qs = request.args.get("amount", type=int)
+
+    # Fallback (compat) a JSON si alguien aún manda body
+    if amt_qs is None:
+        data = request.get_json(silent=True) or {}
+        try:
+            amount = int(data.get("amount") or 0)
+        except (TypeError, ValueError):
+            return api_error("amount inválido.", 400)
+        src = "json"
+    else:
+        amount = amt_qs
+        src = "query"
+
+    # Bloqueo de fila del vehículo para consistencia
+    v = (
+        db.session.query(Vehicle)
+        .filter_by(id=vehicle_id)
+        .with_for_update()
+        .first()
+    )
     if not v:
         return api_error("Vehículo no encontrado.", 404)
     if v.status != "active":
         return api_error("La subasta no está activa.", 409)
     if v.seller_id == uid:
         return api_error("El vendedor no puede pujar su propio vehículo.", 403)
-
-    data = request.get_json() or {}
-    amount = int(data.get("amount") or 0)
 
     # Top actual con lock
     top_row = (
@@ -175,36 +198,54 @@ def place_bid(vehicle_id):
     current = max(v.base_price, top_row.amount if top_row else 0)
     min_required = current + v.min_increment
     if amount < min_required:
-        return api_error("La oferta es menor al mínimo requerido.", 400,
-                         min_required=min_required, current=current, min_increment=v.min_increment)
+        # Respuesta clara para el front
+        resp = api_error(
+            "La oferta es menor al mínimo requerido.",
+            400,
+            min_required=min_required,
+            current=current,
+            min_increment=v.min_increment,
+        )
+        resp.headers["X-Bid-From"] = src
+        return resp
 
     prev_top_bidder = top_row.bidder_id if top_row else None
 
+    # Inserción de la puja
     b = Bid(vehicle_id=vehicle_id, bidder_id=uid, amount=amount)
     db.session.add(b)
 
     if prev_top_bidder and prev_top_bidder != uid:
-        db.session.add(Notification(
-            user_id=prev_top_bidder,
-            type="outbid",
-            payload={"vehicle_id": v.id, "amount": amount}
-        ))
+        db.session.add(
+            Notification(
+                user_id=prev_top_bidder,
+                type="outbid",
+                payload={"vehicle_id": v.id, "amount": amount},
+            )
+        )
 
     db.session.commit()
 
-    # Notificaciones/actualizaciones en vivo
-    # SSE
+    # Notificaciones/tiempo real
     publish(f"vehicle:{v.id}", "top-updated", {"vehicleId": v.id, "top": amount, "bidId": b.id})
-    # Socket.IO - sala del vehículo
-    socketio.emit("top-updated", {"vehicleId": v.id, "top": amount, "bidId": b.id}, to=f"vehicle:{v.id}", namespace="/rt")
-    # Socket.IO - notificación al usuario anterior
+    socketio.emit(
+        "top-updated",
+        {"vehicleId": v.id, "top": amount, "bidId": b.id},
+        to=f"vehicle:{v.id}",
+        namespace="/rt",
+    )
     if prev_top_bidder and prev_top_bidder != uid:
-        socketio.emit("notification", {
-            "type": "outbid",
-            "payload": {"vehicle_id": v.id, "amount": amount}
-        }, to=f"user:{prev_top_bidder}", namespace="/rt")
+        socketio.emit(
+            "notification",
+            {"type": "outbid", "payload": {"vehicle_id": v.id, "amount": amount}},
+            to=f"user:{prev_top_bidder}",
+            namespace="/rt",
+        )
 
-    return api_ok(serialize_bid(b), min_required=amount + v.min_increment)
+    resp = api_ok(serialize_bid(b), min_required=amount + v.min_increment)
+    resp.headers["X-Bid-From"] = src  # diagnóstico: 'query' o 'json'
+    return resp
+
 
 def serialize_vehicle_summary(v: Vehicle):
     current = v.base_price
