@@ -91,33 +91,54 @@ def register():
 @bp.post("/login")
 def login():
     """
-    Modo diagnóstico ultra-rápido:
-    - No consulta DB ni usa bcrypt.
-    - Acepta únicamente las 3 cuentas DEMO.
-    - Emite un JWT con identity "0" y claims (email, name, role, demo=True).
+    Variante a prueba de proxy: lee el cuerpo crudo primero (sin get_json),
+    parsea JSON y responde. Evita bloqueos por streaming/headers raros.
     """
-    data = request.get_json() or {}
-    email = (data.get("email") or "").strip()
-    password = data.get("password") or ""
+    import json, time
+    t0 = time.perf_counter()
+    last = "enter"
 
-    demo_pwd = _DEMO.get(email)
-    if not (demo_pwd and _safe_eq(password, demo_pwd)):
-        return api_error("Credenciales inválidas (modo ultra).", 401)
+    try:
+        # 1) Leer el cuerpo crudo SIN cachear (consume el stream)
+        last = "read_raw"
+        raw = request.get_data(cache=False)  # <- clave
 
-    role = _ROLE_BY_EMAIL.get(email, "buyer")
-    user = {
-        "id": 0,
-        "email": email,
-        "name": f"ULTRA-{email.split('@')[0]}",
-        "role": role,
-    }
+        # 2) Parsear JSON de forma segura
+        last = "parse_json"
+        try:
+            data = json.loads(raw.decode("utf-8") if raw else "{}")
+        except Exception:
+            data = {}
+        email = (data.get("email") or "").strip()
+        password = data.get("password") or ""
 
-    token = create_access_token(
-        identity="0",  # identity numérica en string; sockets la pueden castear a int
-        additional_claims={"email": user["email"], "name": user["name"], "role": user["role"], "demo": True},
-    )
+        # 3) Ultra-login demo (sin DB/bcrypt)
+        demo_pwd = _DEMO.get(email)
+        if not (demo_pwd and _safe_eq(password, demo_pwd)):
+            resp = api_error("Credenciales inválidas (modo ultra).", 401)
+            resp.headers["X-Login-Diag"] = f"{last}|{int((time.perf_counter()-t0)*1000)}ms"
+            return resp
 
-    return api_ok({"token": token, "user": user})
+        role = _ROLE_BY_EMAIL.get(email, "buyer")
+        user = {"id": 0, "email": email, "name": f"ULTRA-{email.split('@')[0]}", "role": role}
+
+        # 4) Generar token
+        last = "create_token"
+        token = create_access_token(identity="0", additional_claims={
+            "email": user["email"], "name": user["name"], "role": user["role"], "demo": True
+        })
+
+        # 5) Responder
+        last = "respond"
+        resp = api_ok({"token": token, "user": user})
+        resp.headers["X-Login-Diag"] = f"{last}|{int((time.perf_counter()-t0)*1000)}ms"
+        return resp
+
+    except Exception as e:
+        resp = api_error("Fallo interno en login.", 500, detail=str(e), last=last)
+        resp.headers["X-Login-Diag"] = f"error:{last}"
+        return resp
+
 # --------- FIN LOGIN ULTRA-RÁPIDO ----------
 
 
