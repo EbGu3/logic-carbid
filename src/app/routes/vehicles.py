@@ -3,8 +3,8 @@ from flask import Blueprint, request, current_app
 from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from ..extensions import db
-from ..models import Vehicle, Bid, User
+from ..extensions import db, socketio
+from ..models import Vehicle, Bid, User, Notification
 from ..utils import api_error, api_ok
 from ..sse import stream, sse_response, publish
 
@@ -12,6 +12,7 @@ bp = Blueprint("vehicles", __name__)
 
 @bp.get("/sse/vehicles/<int:vehicle_id>")
 def sse_vehicle(vehicle_id):
+    # Mantiene compatibilidad por SSE
     return sse_response(stream(f"vehicle:{vehicle_id}"))
 
 @bp.get("/vehicles")
@@ -34,7 +35,6 @@ def list_vehicles():
 @bp.post("/vehicles")
 @jwt_required()
 def create_vehicle():
-    # Reducimos lock waits de esta sesión
     try:
         db.session.execute(text("SET SESSION innodb_lock_wait_timeout = 5"))
     except Exception:
@@ -83,7 +83,6 @@ def create_vehicle():
         min_increment=min_increment, status=data.get("status") or "active",
     )
 
-    # ---- Retry ante 1205/1213 ----
     for attempt in range(3):
         try:
             db.session.add(v)
@@ -91,7 +90,7 @@ def create_vehicle():
             return api_ok(serialize_vehicle_detail(v))
         except OperationalError as e:
             code = getattr(getattr(e, "orig", None), "args", [None])[0]
-            if code in (1205, 1213):  # lock wait / deadlock
+            if code in (1205, 1213):
                 current_app.logger.warning(f"Retry vehicles.insert por lock (intento {attempt+1})")
                 db.session.rollback()
                 sleep(0.35 * (attempt + 1))
@@ -133,8 +132,13 @@ def close_vehicle(vehicle_id):
     if win:
         v.winner_bid_id = win.id
     db.session.commit()
-    publish(f"vehicle:{v.id}", "closed",
-            {"vehicleId": v.id, "winnerBidId": v.winner_bid_id, "amount": win.amount if win else None})
+
+    payload = {"vehicleId": v.id, "winnerBidId": v.winner_bid_id, "amount": win.amount if win else None}
+    # SSE
+    publish(f"vehicle:{v.id}", "closed", payload)
+    # Socket.IO
+    socketio.emit("closed", payload, to=f"vehicle:{v.id}", namespace="/rt")
+
     return api_ok({"vehicleId": v.id, "status": v.status, "winnerBidId": v.winner_bid_id})
 
 @bp.get("/vehicles/<int:vehicle_id>/bids")
@@ -147,6 +151,8 @@ def list_bids(vehicle_id):
 @jwt_required()
 def place_bid(vehicle_id):
     uid = int(get_jwt_identity())
+
+    # Bloqueo de fila del vehículo
     v = db.session.query(Vehicle).filter_by(id=vehicle_id).with_for_update().first()
     if not v:
         return api_error("Vehículo no encontrado.", 404)
@@ -158,21 +164,46 @@ def place_bid(vehicle_id):
     data = request.get_json() or {}
     amount = int(data.get("amount") or 0)
 
-    current = v.base_price
-    top = db.session.query(func.max(Bid.amount)).filter(Bid.vehicle_id == vehicle_id).scalar()
-    if top and top > current:
-        current = top
-
+    # Top actual con lock
+    top_row = (
+        db.session.query(Bid)
+        .filter(Bid.vehicle_id == vehicle_id)
+        .order_by(Bid.amount.desc(), Bid.id.desc())
+        .with_for_update()
+        .first()
+    )
+    current = max(v.base_price, top_row.amount if top_row else 0)
     min_required = current + v.min_increment
     if amount < min_required:
         return api_error("La oferta es menor al mínimo requerido.", 400,
                          min_required=min_required, current=current, min_increment=v.min_increment)
 
+    prev_top_bidder = top_row.bidder_id if top_row else None
+
     b = Bid(vehicle_id=vehicle_id, bidder_id=uid, amount=amount)
     db.session.add(b)
+
+    if prev_top_bidder and prev_top_bidder != uid:
+        db.session.add(Notification(
+            user_id=prev_top_bidder,
+            type="outbid",
+            payload={"vehicle_id": v.id, "amount": amount}
+        ))
+
     db.session.commit()
 
+    # Notificaciones/actualizaciones en vivo
+    # SSE
     publish(f"vehicle:{v.id}", "top-updated", {"vehicleId": v.id, "top": amount, "bidId": b.id})
+    # Socket.IO - sala del vehículo
+    socketio.emit("top-updated", {"vehicleId": v.id, "top": amount, "bidId": b.id}, to=f"vehicle:{v.id}", namespace="/rt")
+    # Socket.IO - notificación al usuario anterior
+    if prev_top_bidder and prev_top_bidder != uid:
+        socketio.emit("notification", {
+            "type": "outbid",
+            "payload": {"vehicle_id": v.id, "amount": amount}
+        }, to=f"user:{prev_top_bidder}", namespace="/rt")
+
     return api_ok(serialize_bid(b), min_required=amount + v.min_increment)
 
 def serialize_vehicle_summary(v: Vehicle):

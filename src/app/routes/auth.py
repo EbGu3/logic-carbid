@@ -1,4 +1,3 @@
-# app/routes/auth.py
 from flask import Blueprint, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from ..extensions import db
@@ -35,7 +34,6 @@ def login():
     if not u or not u.check_password(password):
         return api_error("Credenciales inválidas.", 401)
 
-    # *** IMPORTANTE: el 'identity' debe ser string ***
     token = create_access_token(identity=str(u.id))
     return api_ok({"token": token, "user": {"id": u.id, "email": u.email, "name": u.name, "role": u.role}})
 
@@ -49,7 +47,7 @@ def me():
 @bp.post("/change-password")
 @jwt_required()
 def change_password():
-    uid = get_jwt_identity()
+    uid = int(get_jwt_identity())
     data = request.get_json() or {}
     old_pwd = data.get("old_password")
     new_pwd = data.get("new_password")

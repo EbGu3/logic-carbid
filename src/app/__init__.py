@@ -1,31 +1,43 @@
 from flask import Flask
 from .config import Config
-from .extensions import db, migrate, bcrypt, jwt, cors, scheduler
+from .extensions import db, migrate, bcrypt, jwt, cors, scheduler, socketio
 from .routes import register_blueprints
 from .tasks import schedule_jobs
 from .cli import register_cli
 from .utils import api_error, api_ok
+from .sockets import register_socketio
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config())
 
-    # Extensiones
+    # Extensiones base
     db.init_app(app)
     migrate.init_app(app, db)
     bcrypt.init_app(app)
     jwt.init_app(app)
 
+    # Orígenes QUEMADOS (idénticos para CORS HTTP y WS)
+    ORIGINS = ["https://cbid.click", "https://www.cbid.click"]
+
+    # CORS HTTP solo para /api/*
     cors.init_app(
         app,
         resources={
             r"/api/*": {
-                "origins": ["https://cbid.click", "https://www.cbid.click"],
+                "origins": ORIGINS,
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
                 "allow_headers": ["Content-Type", "Authorization"],
                 "supports_credentials": True
             }
         }
+    )
+
+    # Socket.IO con los mismos orígenes QUEMADOS
+    socketio.init_app(
+        app,
+        cors_allowed_origins=ORIGINS,
+        cors_credentials=True,
     )
 
     register_blueprints(app)
@@ -51,6 +63,9 @@ def create_app():
     scheduler.init_app(app)
     schedule_jobs(scheduler, app)
     scheduler.start()
+
+    # Namespaces/handlers de Socket.IO
+    register_socketio(socketio)
 
     register_cli(app)
     return app
