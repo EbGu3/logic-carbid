@@ -1,1 +1,1 @@
-web: gunicorn --chdir src -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 wsgi:app
+web: gunicorn --chdir src wsgi:app -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 2 --timeout 120
