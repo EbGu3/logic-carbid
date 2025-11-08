@@ -35,11 +35,20 @@ def list_vehicles():
 @bp.post("/vehicles")
 @jwt_required()
 def create_vehicle():
+    """
+    Crea un vehículo aceptando **POST sin body** con parámetros en query-string,
+    p. ej.:
+      POST /api/vehicles?make=Ford&model=Mustang&year=1969&base_price=200000&lot_code=F54
+      &description=...&images=https://a.jpg&images=https://b.jpg
+    También mantiene compatibilidad con JSON en el body.
+    """
+    # (Opcional) reducir esperas por locks
     try:
         db.session.execute(text("SET SESSION innodb_lock_wait_timeout = 5"))
     except Exception:
         pass
 
+    # UID desde JWT
     uid_raw = get_jwt_identity()
     try:
         uid = int(uid_raw)
@@ -52,45 +61,75 @@ def create_vehicle():
     if user.role not in ("seller", "admin"):
         return api_error("Solo vendedores o administradores pueden publicar.", 403)
 
-    data = request.get_json() or {}
+    # -------- Entrada: prioridad a QUERY STRING; fallback a JSON ----------
+    data = request.get_json(silent=True) or {}
 
-    make = (data.get("make") or "").strip()
-    model = (data.get("model") or "").strip()
-    lot_code = (data.get("lot_code") or "").strip()
+    def pick_str(key):
+        return (request.args.get(key) or data.get(key) or "").strip()
 
-    try:
-        year = int(data.get("year") or 0)
-        base_price = int(data.get("base_price") or 0)
-        min_increment = int(data.get("min_increment") or 100)
-    except ValueError:
-        return api_error("Campos numéricos inválidos (year/base_price/min_increment).", 400)
+    def pick_int(key, default=0):
+        v_qs = request.args.get(key, type=int)
+        if v_qs is not None:
+            return v_qs
+        try:
+            return int(data.get(key) or default)
+        except (TypeError, ValueError):
+            return default
 
+    make = pick_str("make")
+    model = pick_str("model")
+    lot_code = pick_str("lot_code")
+
+    year = pick_int("year", 0)
+    base_price = pick_int("base_price", 0)
+    min_inc_default = current_app.config.get("MIN_INCREMENT_DEFAULT", 100)
+    min_increment = pick_int("min_increment", min_inc_default)
+
+    # images: soporta ?images=a&images=b o ?images_csv=a,b
+    images = request.args.getlist("images")
+    if not images:
+        images_csv = request.args.get("images_csv")
+        if images_csv:
+            images = [s.strip() for s in images_csv.split(",") if s.strip()]
+    if not images:
+        images = data.get("images") or []
+
+    # Validaciones
     if not all([make, model, lot_code]) or year < 1886 or base_price <= 0:
         return api_error("Datos incompletos o inválidos.", 400)
+
+    if not isinstance(images, list):
+        return api_error("images debe ser un arreglo de URLs.", 400)
 
     if Vehicle.query.filter_by(lot_code=lot_code).first():
         return api_error("El código de lote ya existe.", 409)
 
-    imgs = data.get("images") or []
-    if not isinstance(imgs, list):
-        return api_error("images debe ser un arreglo de URLs.", 400)
-
+    # Crear entidad
     v = Vehicle(
         seller_id=uid,
-        make=make, model=model, year=year,
-        base_price=base_price, lot_code=lot_code,
-        images=imgs, description=data.get("description"),
-        min_increment=min_increment, status=data.get("status") or "active",
+        make=make,
+        model=model,
+        year=year,
+        base_price=base_price,
+        lot_code=lot_code,
+        images=images,
+        description=pick_str("description"),
+        min_increment=min_increment,
+        status=pick_str("status") or "active",
     )
 
+    # Commit con reintentos ante deadlocks
     for attempt in range(3):
         try:
             db.session.add(v)
             db.session.commit()
-            return api_ok(serialize_vehicle_detail(v))
+            resp = api_ok(serialize_vehicle_detail(v))
+            # Cabecera de diagnóstico para saber de dónde vino la data
+            resp.headers["X-Vehicle-From"] = "query" if request.args else "json"
+            return resp
         except OperationalError as e:
             code = getattr(getattr(e, "orig", None), "args", [None])[0]
-            if code in (1205, 1213):
+            if code in (1205, 1213):  # lock/deadlock
                 current_app.logger.warning(f"Retry vehicles.insert por lock (intento {attempt+1})")
                 db.session.rollback()
                 sleep(0.35 * (attempt + 1))
@@ -100,8 +139,7 @@ def create_vehicle():
             return api_error("No se pudo publicar el vehículo.", 400, details=str(getattr(e, "orig", e)))
         except IntegrityError as e:
             db.session.rollback()
-            return api_error("Conflicto de datos (posible lote duplicado).", 409,
-                             details=str(getattr(e, "orig", e)))
+            return api_error("Conflicto de datos (posible lote duplicado).", 409, details=str(getattr(e, "orig", e)))
         except SQLAlchemyError as e:
             db.session.rollback()
             current_app.logger.exception("Error SQL creando vehículo")
