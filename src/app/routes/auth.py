@@ -24,16 +24,10 @@ def register():
     db.session.commit()
     return api_ok({"id": u.id, "email": u.email, "name": u.name, "role": u.role})
 
-@bp.post("/login")
+@bp.route("/login", methods=["GET", "POST"])   # <- acepta ambos
 def login():
-    """
-    Login robusto: intenta leer JSON; si no hay cuerpo, usa querystring.
-    Permite POST /api/auth/login?email=...&password=...
-    """
-    # 1) Intento "silencioso" de JSON (no lanza 400 si no es JSON)
+    # 1) intenta JSON; si no, usa query string
     data = request.get_json(silent=True) or {}
-
-    # 2) Fallback a querystring si el body no llegó o vino vacío
     email = (data.get("email") or request.args.get("email") or "").strip()
     password = (data.get("password") or request.args.get("password") or "")
 
@@ -44,17 +38,10 @@ def login():
     if not u or not u.check_password(password):
         return api_error("Credenciales inválidas.", 401)
 
-    # *** IMPORTANTE: el 'identity' debe ser string ***
     token = create_access_token(identity=str(u.id))
-
-    resp = api_ok({
-        "token": token,
-        "user": {"id": u.id, "email": u.email, "name": u.name, "role": u.role}
-    })
-
-    # Cabeceras de diagnóstico (opcional)
-    resp.headers["X-Auth-From"] = "json" if "email" in data else "query"
-    return resp
+    return api_ok({"token": token, "user": {
+        "id": u.id, "email": u.email, "name": u.name, "role": u.role
+    }})
 
 @bp.get("/me")
 @jwt_required()
