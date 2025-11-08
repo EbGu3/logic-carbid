@@ -10,3 +10,8 @@ APScheduler==3.10.4
 PyMySQL
 Flask-Bcrypt==1.0.1
 Flask-APScheduler==1.13.1
+Flask-SocketIO>=5.3,<6
+gevent>=24.2
+gevent-websocket>=0.10
+pytest>=8.0
+pytest-cov>=5.0
