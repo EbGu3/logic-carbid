@@ -15,7 +15,18 @@ def create_app():
     migrate.init_app(app, db)
     bcrypt.init_app(app)
     jwt.init_app(app)
-    cors.init_app(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
+
+    cors.init_app(
+        app,
+        resources={
+            r"/api/*": {
+                "origins": ["https://cbid.click", "https://www.cbid.click"],
+                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                "allow_headers": ["Content-Type", "Authorization"],
+                "supports_credentials": True
+            }
+        }
+    )
 
     register_blueprints(app)
 
