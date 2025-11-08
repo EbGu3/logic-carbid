@@ -22,6 +22,8 @@ class Config:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-change-me")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=12)
 
+    BCRYPT_LOG_ROUNDS = int(os.getenv("BCRYPT_LOG_ROUNDS", "10"))
+
     CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")]
 
     MIN_INCREMENT_DEFAULT = int(os.getenv("MIN_INCREMENT_DEFAULT", "100"))

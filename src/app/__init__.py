@@ -1,4 +1,5 @@
-from flask import Flask
+# src/app/__init__.py
+from flask import Flask, request, current_app
 from .config import Config
 from .extensions import db, migrate, bcrypt, jwt, cors, scheduler, socketio
 from .routes import register_blueprints
@@ -20,7 +21,7 @@ def create_app():
     # Orígenes QUEMADOS (idénticos para CORS HTTP y WS)
     ORIGINS = ["https://cbid.click", "https://www.cbid.click"]
 
-    # CORS HTTP solo para /api/*
+    # CORS HTTP para /api/* y también para /socket.io/* (preflight del WS)
     cors.init_app(
         app,
         resources={
@@ -28,9 +29,15 @@ def create_app():
                 "origins": ORIGINS,
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
                 "allow_headers": ["Content-Type", "Authorization"],
-                "supports_credentials": True
-            }
-        }
+                "supports_credentials": True,
+            },
+            r"/socket.io/*": {
+                "origins": ORIGINS,
+                "methods": ["GET", "POST", "OPTIONS"],
+                "allow_headers": ["Content-Type", "Authorization"],
+                "supports_credentials": True,
+            },
+        },
     )
 
     # Socket.IO con los mismos orígenes QUEMADOS
@@ -39,6 +46,25 @@ def create_app():
         cors_allowed_origins=ORIGINS,
         cors_credentials=True,
     )
+
+    # Preflight ultrarrápido para evitar timeouts en OPTIONS de API/WS
+    @app.before_request
+    def _fast_preflight():
+        if request.method == "OPTIONS" and (
+            request.path.startswith("/api/") or request.path.startswith("/socket.io/")
+        ):
+            resp = current_app.make_default_options_response()
+            origin = request.headers.get("Origin", "")
+            req_hdrs = request.headers.get(
+                "Access-Control-Request-Headers", "Authorization, Content-Type"
+            )
+            if origin in ORIGINS:
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Vary"] = "Origin"
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+                resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+                resp.headers["Access-Control-Allow-Headers"] = req_hdrs
+            return resp
 
     register_blueprints(app)
 
