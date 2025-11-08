@@ -30,6 +30,20 @@ _ROLE_BY_EMAIL = {
     "buyer@carbid.test":  "buyer",
 }
 
+@bp.post("/_login_ping")
+def _login_ping():
+    # ¿Llega al handler y devuelve?
+    return api_ok({"ping": "pong"})
+
+@bp.post("/_jwt_bench")
+def _jwt_bench():
+    # ¿Se bloquea al crear el JWT?
+    import time
+    t0 = time.perf_counter()
+    tok = create_access_token(identity="0", additional_claims={"probe": True})
+    dt = int((time.perf_counter() - t0) * 1000)
+    return api_ok({"ms": dt, "token_len": len(tok)})
+
 @bp.post("/_echo")
 def _echo():
     data = request.get_json(silent=True) or {}
