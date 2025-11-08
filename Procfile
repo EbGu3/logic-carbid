@@ -1,1 +1,1 @@
-web: gunicorn --chdir src wsgi:app
+web: gunicorn --chdir src -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 -b 0.0.0.0:$PORT --timeout 0 --graceful-timeout 30 --keep-alive 30 wsgi:app
