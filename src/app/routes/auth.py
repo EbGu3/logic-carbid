@@ -9,22 +9,38 @@ bp = Blueprint("auth", __name__)
 
 @bp.post("/register")
 def register():
-    data = request.get_json() or {}
-    name = data.get("name")
-    email = data.get("email")
-    password = data.get("password")
-    role = data.get("role", "buyer")
+    """
+    Registro por POST **sin body** usando query-string.
+    También acepta JSON como compatibilidad.
+
+    Ejemplos válidos:
+      POST /api/auth/register?name=Ana&email=ana@test.com&password=xyz&role=seller
+      POST /api/auth/register     (con JSON {"name": "...", "email": "...", ...})
+    """
+    data = request.get_json(silent=True) or {}
+
+    name = (data.get("name") or request.args.get("name") or "").strip()
+    email = (data.get("email") or request.args.get("email") or "").strip().lower()
+    password = (data.get("password") or request.args.get("password") or "")
+    role = (data.get("role") or request.args.get("role") or "buyer").strip().lower()
+
     if not all([name, email, password]):
-        return api_error("Faltan campos obligatorios (name, email, password).")
+        return api_error("Faltan campos obligatorios (name, email, password).", 400)
+
+    if role not in ("buyer", "seller", "admin"):
+        return api_error("Rol inválido. Use buyer, seller o admin.", 400)
+
     if User.query.filter_by(email=email).first():
         return api_error("El correo ya está registrado.", 409)
+
     u = User(name=name, email=email, role=role)
     u.set_password(password)
     db.session.add(u)
     db.session.commit()
+
     return api_ok({"id": u.id, "email": u.email, "name": u.name, "role": u.role})
 
-@bp.route("/login", methods=["GET", "POST"])   # <- acepta ambos
+@bp.route("/login", methods=["GET", "POST"])   # acepta ambos
 def login():
     # 1) intenta JSON; si no, usa query string
     data = request.get_json(silent=True) or {}
