@@ -1,1 +1,1 @@
-web: gunicorn --chdir src wsgi:app
+web: gunicorn --chdir src -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 wsgi:app
