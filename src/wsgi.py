@@ -1,5 +1,3 @@
-from gevent import monkey
-monkey.patch_all()
-
+# src/wsgi.py
 from app import create_app
 app = create_app()
