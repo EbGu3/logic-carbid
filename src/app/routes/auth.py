@@ -91,53 +91,72 @@ def register():
 @bp.post("/login")
 def login():
     """
-    Variante a prueba de proxy: lee el cuerpo crudo primero (sin get_json),
-    parsea JSON y responde. Evita bloqueos por streaming/headers raros.
+    Probe login con 'returns' tempranos controlados por ?ret=.
+    Valores: enter | raw | parse | demo | before_token
     """
     import json, time
     t0 = time.perf_counter()
-    last = "enter"
+    ret = (request.args.get("ret") or "").strip().lower()
 
+    def done(tag, data=None, status=200):
+        # Respuesta compacta + headers de diagnóstico
+        resp = api_ok(data if data is not None else {"stage": tag})
+        resp.headers["X-Probe-At"] = tag
+        resp.headers["X-Probe-Duration"] = f"{int((time.perf_counter()-t0)*1000)}ms"
+        return resp, status
+
+    # 0) Justo al entrar
+    if ret == "enter":
+        return done("enter")
+
+    # 1) Leer cuerpo crudo (evita bloqueos típicos de get_json)
     try:
-        # 1) Leer el cuerpo crudo SIN cachear (consume el stream)
-        last = "read_raw"
-        raw = request.get_data(cache=False)  # <- clave
-
-        # 2) Parsear JSON de forma segura
-        last = "parse_json"
-        try:
-            data = json.loads(raw.decode("utf-8") if raw else "{}")
-        except Exception:
-            data = {}
-        email = (data.get("email") or "").strip()
-        password = data.get("password") or ""
-
-        # 3) Ultra-login demo (sin DB/bcrypt)
-        demo_pwd = _DEMO.get(email)
-        if not (demo_pwd and _safe_eq(password, demo_pwd)):
-            resp = api_error("Credenciales inválidas (modo ultra).", 401)
-            resp.headers["X-Login-Diag"] = f"{last}|{int((time.perf_counter()-t0)*1000)}ms"
-            return resp
-
-        role = _ROLE_BY_EMAIL.get(email, "buyer")
-        user = {"id": 0, "email": email, "name": f"ULTRA-{email.split('@')[0]}", "role": role}
-
-        # 4) Generar token
-        last = "create_token"
-        token = create_access_token(identity="0", additional_claims={
-            "email": user["email"], "name": user["name"], "role": user["role"], "demo": True
-        })
-
-        # 5) Responder
-        last = "respond"
-        resp = api_ok({"token": token, "user": user})
-        resp.headers["X-Login-Diag"] = f"{last}|{int((time.perf_counter()-t0)*1000)}ms"
-        return resp
-
+        raw = request.get_data(cache=False)  # <- importante: no cachear
     except Exception as e:
-        resp = api_error("Fallo interno en login.", 500, detail=str(e), last=last)
-        resp.headers["X-Login-Diag"] = f"error:{last}"
-        return resp
+        return api_error("read_raw_failed", 500, detail=str(e))
+    if ret == "raw":
+        return done("raw", {"len": len(raw or b'')})
+
+    # 2) Parsear JSON
+    try:
+        data = json.loads(raw.decode("utf-8") if raw else "{}")
+    except Exception as e:
+        # Si querías cortar justo después del parseo, lo dejamos claro
+        if ret in ("parse", "after_parse"):
+            return api_error("parse_error", 400, detail=str(e))
+        # Si no, seguimos con data vacío para no romper más pruebas
+        data = {}
+    if ret in ("parse", "after_parse"):
+        return done("parse", {"ok": True, "has_body": bool(raw)})
+
+    # 3) Validar demo-fastpath (SIN DB / SIN bcrypt)
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    demo_pwd = _DEMO.get(email)
+    if ret == "demo":
+        return done("demo", {"has_demo": bool(demo_pwd)})
+
+    if not (demo_pwd and _safe_eq(password, demo_pwd)):
+        return api_error("Credenciales inválidas (modo ultra).", 401)
+
+    # 4) Antes de crear el JWT
+    if ret == "before_token":
+        return done("before_token")
+
+    # 5) Crear token y responder
+    role = _ROLE_BY_EMAIL.get(email, "buyer")
+    user = {
+        "id": 0,
+        "email": email,
+        "name": f"ULTRA-{email.split('@')[0]}",
+        "role": role,
+    }
+    token = create_access_token(
+        identity="0",
+        additional_claims={"email": user["email"], "name": user["name"], "role": user["role"], "demo": True},
+    )
+    return api_ok({"token": token, "user": user})
+
 
 # --------- FIN LOGIN ULTRA-RÁPIDO ----------
 
